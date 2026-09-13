@@ -1,0 +1,184 @@
+function doGet(e) {
+  const page = (e && e.parameter && e.parameter.page) ? e.parameter.page : 'admin';
+  const template = (page === 'screen') ? 'WelcomeScreen' : 'DashboardAdmin';
+
+  return HtmlService.createTemplateFromFile(template)
+    .evaluate()
+    .setTitle(page === 'screen' ? 'Welcome Screen Computa' : 'Dashboard Presensi Computa')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1.0');
+}
+// File: 01_Router.gs
+
+function apiToggleFormStatus(isOpen) {
+  try {
+    return EventModule.toggleFormAccepting(isOpen);
+  } catch (err) {
+    Logger.log("apiToggleFormStatus Error: " + err.toString());
+    return { status: "error", message: err.toString() };
+  }
+}
+function onFormSubmitTrigger(e) {
+  try {
+    const active = EventModule.getActiveEvent();
+    if (!active || active.status !== "AKTIF") return;
+
+    const ss = getDbSpreadsheet();
+    let sheet = ss.getSheetByName(CONFIG.DATABASE.DATA_SHEET);
+    if (!sheet) {
+      sheet = ss.insertSheet(CONFIG.DATABASE.DATA_SHEET);
+      sheet.appendRow(["Timestamp", "Event ID", "Ticket ID", "Nama Lengkap", "Instansi", "Email", "WhatsApp", "Status", "Waktu Masuk", "Gate"]);
+    }
+
+    CoreLock.execute(() => {
+      // Urutan respon form: [Timestamp, Email, Nama Lengkap, Instansi, WhatsApp]
+      const responses = e.values; 
+      const timestamp = responses[0];
+      const email = responses[1];
+      const name = responses[2];
+      const agency = responses[3];
+      const wa = responses[4];
+
+      // Buat Ticket ID otomatis
+      const ticketId = "TIK-" + Math.floor(1000 + Math.random() * 9000);
+
+      // Pindahkan otomatis ke baris baru Presensi_Master
+      sheet.appendRow([
+        timestamp,
+        active.eventId,
+        ticketId,
+        name,
+        agency,
+        email,
+        wa,
+        "Belum", // Status awal
+        "-",     // Jam masuk
+        "-"      // Lajur gate
+      ]);
+
+      // Otomatis kirim email e-ticket
+      AttendanceModule.sendEmail(email, name, agency, ticketId, active);
+    });
+  } catch (err) {
+    Logger.log("Gagal memindahkan data otomatis: " + err.toString());
+  }
+}
+// File: 01_Router.gs
+
+/**
+ * Menyelesaikan dan mengarsipkan event yang sedang aktif.
+ * Mengubah status jadi SELESAI, menutup form, membersihkan data presensi, dan mereset cache.
+ */
+function apiArchiveEvent() {
+  try {
+    const ss = getDatabaseSpreadsheet ? getDatabaseSpreadsheet() : SpreadsheetApp.getActiveSpreadsheet();
+    const masterSheet = ss.getSheetByName(CONFIG.DATABASE.MASTER_SHEET);
+    if (!masterSheet || masterSheet.getLastRow() < 2) {
+      return { status: "error", message: "Database event kosong." };
+    }
+
+    const rows = masterSheet.getDataRange().getValues();
+    const headers = rows[0].map(h => String(h).trim().toLowerCase());
+    
+    // Cari letak kolom status dan form ID secara fleksibel
+    let statusColIdx = headers.indexOf("status");
+    let formIdColIdx = headers.indexOf("form id");
+    if (statusColIdx === -1) statusColIdx = headers.length - 1;
+    if (formIdColIdx === -1) formIdColIdx = 5;
+
+    let targetEventFound = false;
+
+    // Ubah semua event berstatus AKTIF atau TUTUP_FORM menjadi SELESAI
+    for (let i = 1; i < rows.length; i++) {
+      const currentStatus = String(rows[i][statusColIdx] || "").trim().toUpperCase();
+      if (currentStatus === "AKTIF" || currentStatus === "TUTUP_FORM") {
+        masterSheet.getRange(i + 1, statusColIdx + 1).setValue("SELESAI");
+        targetEventFound = true;
+
+        // Kunci respon Google Form
+        try {
+          const formId = rows[i][formIdColIdx];
+          if (formId) {
+            FormApp.openById(formId).setAcceptingResponses(false);
+          }
+        } catch (formErr) {
+          Logger.log("Peringatan form tutup: " + formErr.message);
+        }
+      }
+    }
+
+    // Bersihkan baris di Presensi_Master agar counter langsung 0
+    const presensiSheet = ss.getSheetByName(CONFIG.DATABASE.DATA_SHEET);
+    if (presensiSheet && presensiSheet.getLastRow() > 1) {
+      presensiSheet.deleteRows(2, presensiSheet.getLastRow() - 1);
+    }
+
+    // Bersihkan cache
+    if (typeof CoreCache !== 'undefined') {
+      CoreCache.remove("ACTIVE_EVENT");
+      CoreCache.remove("ACTIVE_EVENT_META");
+    }
+
+    return { 
+      status: "success", 
+      message: targetEventFound ? "Event berhasil diarsipkan." : "Tidak ada event aktif yang perlu diarsipkan." 
+    };
+
+  } catch (err) {
+    Logger.log("apiArchiveEvent Error: " + err.toString());
+    return { status: "error", message: err.toString() };
+  }
+}
+
+/**
+ * 2. PENGAMBIL DATA ARSIP EVENT
+ * Mengirim seluruh daftar event terdahulu untuk ditampilkan di tab 'Arsip Event'
+ */
+function apiGetArchives() {
+  try {
+    const ss = getDatabaseSpreadsheet ? getDatabaseSpreadsheet() : SpreadsheetApp.getActiveSpreadsheet();
+    const masterSheet = ss.getSheetByName(CONFIG.DATABASE.MASTER_SHEET);
+    if (!masterSheet || masterSheet.getLastRow() < 2) return [];
+
+    const rows = masterSheet.getDataRange().getValues();
+    const archives = [];
+
+    // Baca dari baris kedua ke bawah
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i];
+      if (!r[0]) continue; // Lewati jika Event ID kosong
+
+      archives.push({
+        id: String(r[0] || "-"),
+        title: String(r[1] || "Acara Tanpa Judul"),
+        date: String(r[2] || "-"),
+        time: String(r[3] || "-"),
+        location: String(r[4] || "-"),
+        status: String(r[7] || r[r.length - 1] || "SELESAI")
+      });
+    }
+
+    // Tampilkan dari yang paling baru diarsipkan
+    return archives.reverse();
+
+  } catch (e) {
+    Logger.log("apiGetArchives Error: " + e.toString());
+    return [];
+  }
+}
+
+// Alias untuk menjaga kompatibilitas pemanggilan lama
+function apiToggleLockdown() {
+  return apiArchiveEvent();
+}
+// Controller Endpoints
+function apiGetDashboard() { return AnalyticsModule.getDashboardData(); }
+function apiCreateEvent(payload) { return EventModule.createEvent(payload); }
+function apiToggleLockdown() { return EventModule.toggleLockdown(); }
+function apiGetArchives() { return AnalyticsModule.getAllArchives(); }
+function apiCheckIn(code, gate) { return AttendanceModule.checkIn(code, gate); }
+function apiGetActiveConfig() { return EventModule.getActiveEvent(); }
+function apiVerifyLogin(username, password) {return LoginModule.verify(username, password);}
+
+// Trigger Form Submit
+function onFormSubmitTrigger(e) { AttendanceModule.handleFormSubmit(e); }
