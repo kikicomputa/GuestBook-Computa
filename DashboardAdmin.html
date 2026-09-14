@@ -16,13 +16,13 @@
   <!-- Sidebar Navigasi -->
   <aside class="w-64 bg-white border-r border-gray-200 flex flex-col justify-between p-6 shrink-0">
     <div>
-     <div class="flex items-center gap-3 mb-8">
-  <img 
-    src="https://i.imgur.com/8gpyeCN.png" 
-    alt="Logo Computa" 
-    class="h-8 max-w-[180px] object-contain"
-  >
-</div>
+      <div class="flex items-center gap-3 mb-8">
+        <img 
+          src="https://i.imgur.com/8gpyeCN.png" 
+          alt="Logo Computa" 
+          class="h-8 max-w-[180px] object-contain"
+        >
+      </div>
 
       <p class="text-[10px] font-bold text-gray-400 tracking-wider uppercase mb-3">MAIN MENU</p>
       <nav class="space-y-1">
@@ -261,85 +261,97 @@
       
     </div>
   </main>
+
+  <!-- Container Toast Notification -->
   <div id="toast-container" class="fixed top-5 right-5 z-50 flex flex-col gap-2.5 pointer-events-none"></div>
-  <div id="toast-container" class="fixed top-5 right-5 z-50 flex flex-col gap-2.5 pointer-events-none"></div>
+
   <script>
-   
-   // Cek Session saat halaman pertama dibuka
-    function checkAuthSession() {
-      var isAuth = sessionStorage.getItem("IS_ADMIN_AUTH");
-      var overlay = document.getElementById("login-overlay");
+    var rawGuests = [];
+    var currentFilter = 'ALL';
+    var isPolling = false;
+    var pollTimer = null;
+    var POLL_INTERVAL = 12000;
 
-      if (isAuth === "true") {
-        if (overlay) overlay.classList.add("hidden");
-        pollDashboard();
-      } else {
-        if (overlay) overlay.classList.remove("hidden");
-      }
-    }
-
-    // Eksekusi Login
-    function handleLoginSubmit(e) {
+    // FUNGSI UTAMA GENERATE FORM EVENT
+    function handleCreateEvent(e) {
       if (e && e.preventDefault) e.preventDefault();
 
-      var userEl = document.getElementById("login-username");
-      var passEl = document.getElementById("login-password");
-      var btn = document.getElementById("btn-login-submit");
-
-      var username = userEl ? userEl.value.trim() : "";
-      var password = passEl ? passEl.value.trim() : "";
-
-      if (!username || !password) {
-        showToast("Peringatan", "Harap isi username dan password.", "warning");
-        return;
-      }
-
+      var btn = document.getElementById('btn-submit-ev');
       if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<span>Memverifikasi...</span>';
+        btn.innerText = "MEMPROSES GOOGLE FORM...";
+      }
+
+      var titleEl = document.getElementById('ev-title');
+      var dateEl = document.getElementById('ev-date');
+      var timeEl = document.getElementById('ev-time');
+      var locEl = document.getElementById('ev-location');
+
+      var payload = {
+        title: titleEl ? titleEl.value.trim() : '',
+        date: dateEl ? dateEl.value.trim() : '',
+        time: timeEl ? timeEl.value.trim() : '',
+        location: locEl ? locEl.value.trim() : ''
+      };
+
+      if (!payload.title || !payload.date || !payload.time || !payload.location) {
+        showToast("Form Belum Lengkap", "Harap isi semua kolom bertanda bintang (*).", "warning");
+        if (btn) {
+          btn.disabled = false;
+          btn.innerText = "GENERATE GOOGLE FORM";
+        }
+        return;
       }
 
       google.script.run
         .withSuccessHandler(function(res) {
           if (btn) {
             btn.disabled = false;
-            btn.innerHTML = '<span>Masuk ke Dashboard</span><i data-lucide="arrow-right" class="w-3.5 h-3.5"></i>';
-            if (typeof lucide !== 'undefined') lucide.createIcons();
+            btn.innerText = "GENERATE GOOGLE FORM";
           }
 
-          if (res && res.status === "success") {
-            sessionStorage.setItem("IS_ADMIN_AUTH", "true");
-            
-            // Animasi tutup overlay
-            var overlay = document.getElementById("login-overlay");
-            if (overlay) {
-              overlay.classList.add("opacity-0", "pointer-events-none");
-              setTimeout(function() {
-                overlay.classList.add("hidden");
-              }, 400);
+          if (res && res.status === 'success') {
+            var formUrl = res.formUrl;
+
+            var linkInput = document.getElementById('form-link-input');
+            if (linkInput) linkInput.value = formUrl;
+
+            var openBtn = document.getElementById('form-open-btn');
+            if (openBtn) openBtn.href = formUrl;
+
+            var qrImg = document.getElementById('form-qr');
+            var placeholder = document.getElementById('form-qr-placeholder');
+
+            if (qrImg) {
+              qrImg.src = "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=" + encodeURIComponent(formUrl);
+              qrImg.classList.remove('hidden');
+            }
+            if (placeholder) {
+              placeholder.classList.add('hidden');
             }
 
-            showToast("Login Berhasil", "Selamat datang, " + res.user.name, "success");
+            if (titleEl) titleEl.value = '';
+            if (dateEl) dateEl.value = '';
+            if (timeEl) timeEl.value = '';
+            if (locEl) locEl.value = '';
+
+            showToast("Event Diterbitkan", "Google Form dan pendaftaran baru siap disebarkan.", "success");
             pollDashboard();
           } else {
-            showToast("Login Gagal", res.message || "Kredensial tidak cocok.", "error");
+            showToast("Gagal Membuat Event", (res ? res.message : "Terjadi kendala pada server."), "error");
           }
         })
         .withFailureHandler(function(err) {
           if (btn) {
             btn.disabled = false;
-            btn.innerHTML = '<span>Masuk ke Dashboard</span><i data-lucide="arrow-right" class="w-3.5 h-3.5"></i>';
+            btn.innerText = "GENERATE GOOGLE FORM";
           }
-          showToast("Kesalahan Jaringan", err.message, "error");
+          showToast("Kesalahan Sistem", err.message, "error");
         })
-        .apiVerifyLogin(username, password);
+        .apiCreateEvent(payload);
     }
 
-    // Fungsi Logout Tambahan (Bisa dipasang di pojok kanan/bawah sidebar)
-    function handleLogout() {
-      sessionStorage.removeItem("IS_ADMIN_AUTH");
-      location.reload();
-    }
+    // Toast Notification Generator
     function showToast(title, message, type) {
       type = type || 'info';
       var container = document.getElementById('toast-container');
@@ -348,28 +360,28 @@
       var configs = {
         success: {
           border: 'border-emerald-200',
-          bg: 'bg-emerald-50/80',
+          bg: 'bg-emerald-50/90',
           iconBg: 'bg-emerald-500 text-white',
           icon: '<i data-lucide="check" class="w-4 h-4"></i>',
           textColor: 'text-emerald-950'
         },
         warning: {
           border: 'border-amber-200',
-          bg: 'bg-amber-50/80',
+          bg: 'bg-amber-50/90',
           iconBg: 'bg-amber-500 text-white',
           icon: '<i data-lucide="alert-triangle" class="w-4 h-4"></i>',
           textColor: 'text-amber-950'
         },
         info: {
           border: 'border-blue-200',
-          bg: 'bg-blue-50/80',
+          bg: 'bg-blue-50/90',
           iconBg: 'bg-blue-500 text-white',
           icon: '<i data-lucide="info" class="w-4 h-4"></i>',
           textColor: 'text-blue-950'
         },
         error: {
           border: 'border-rose-200',
-          bg: 'bg-rose-50/80',
+          bg: 'bg-rose-50/90',
           iconBg: 'bg-rose-500 text-white',
           icon: '<i data-lucide="x" class="w-4 h-4"></i>',
           textColor: 'text-rose-950'
@@ -378,8 +390,6 @@
 
       var cfg = configs[type] || configs.info;
       var toast = document.createElement('div');
-      
-      // Styling card: backdrop blur halus, floating shadow, transisi geser
       toast.className = 'pointer-events-auto flex items-start gap-3 w-80 p-3.5 rounded-2xl border ' + cfg.border + ' ' + cfg.bg + ' backdrop-blur-md shadow-lg shadow-slate-900/5 transition-all duration-300 transform translate-y-2 opacity-0';
       toast.innerHTML = 
         '<div class="w-7 h-7 rounded-xl flex items-center justify-center shrink-0 ' + cfg.iconBg + '">' +
@@ -396,13 +406,11 @@
       container.appendChild(toast);
       if (typeof lucide !== 'undefined') lucide.createIcons();
 
-      // Trigger animasi masuk
       setTimeout(function() {
         toast.classList.remove('translate-y-2', 'opacity-0');
         toast.classList.add('translate-y-0', 'opacity-100');
       }, 20);
 
-      // Auto dismiss setelah 4 detik
       setTimeout(function() {
         toast.classList.add('opacity-0', 'translate-x-4');
         setTimeout(function() {
@@ -410,18 +418,49 @@
         }, 300);
       }, 4000);
     }
-   
-   var rawGuests = [];
-    var currentFilter = 'ALL';
+
+    function switchTab(tab) {
+      var tabs = ['lajur', 'tamu', 'form', 'arsip'];
+      for (var i = 0; i < tabs.length; i++) {
+        var t = tabs[i];
+        var el = document.getElementById('tab-' + t);
+        var targetBtn = document.getElementById('btn-' + t);
+        if (el) el.classList.add('hidden');
+        if (targetBtn) {
+          targetBtn.classList.remove('bg-orange-50', 'text-orange-600');
+          targetBtn.classList.add('text-gray-500');
+        }
+      }
+
+      var activeEl = document.getElementById('tab-' + tab);
+      var activeBtn = document.getElementById('btn-' + tab);
+      if (activeEl) activeEl.classList.remove('hidden');
+      if (activeBtn) {
+        activeBtn.classList.add('bg-orange-50', 'text-orange-600');
+        activeBtn.classList.remove('text-gray-500');
+      }
+
+      var titles = {
+        lajur: 'Lajur & Counter Monitoring',
+        tamu: 'Daftar Tamu & Presensi',
+        form: 'Buat Formulir Event',
+        arsip: 'Arsip & Rekapitulasi Event'
+      };
+      if (titles[tab]) document.getElementById('page-title').innerText = titles[tab];
+
+      if (tab === 'arsip') loadArchives();
+      if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+
     function filterGuests(type) {
       currentFilter = type;
       renderGuestTable();
     }
 
     function renderGuestTable() {
-      var searchInput = document.getElementById('search-guest') || document.getElementById('admin-search');
+      var searchInput = document.getElementById('search-guest');
       var q = searchInput ? (searchInput.value || '').toLowerCase() : '';
-      var tbody = document.getElementById('table-guest-body') || document.getElementById('guest-table-body');
+      var tbody = document.getElementById('table-guest-body');
       if (!tbody) return;
 
       tbody.innerHTML = '';
@@ -475,7 +514,7 @@
     }
 
     function renderLiveFeed() {
-      var feed = document.getElementById('live-feed') || document.getElementById('live-feed-list');
+      var feed = document.getElementById('live-feed');
       if (!feed) return;
 
       var checked = rawGuests.filter(function(g) { return g.status === 'Hadir'; }).reverse().slice(0, 5);
@@ -543,24 +582,13 @@
       }
     }
 
-    function fallbackCopy(inputEl) {
-      inputEl.select();
-      inputEl.setSelectionRange(0, 99999);
-      try {
-        var ok = document.execCommand('copy');
-        if (ok) alert("Tautan formulir berhasil disalin!");
-        else prompt("Salin manual:", inputEl.value);
-      } catch (e) {
-        prompt("Salin manual:", inputEl.value);
-      }
-    }
-
     function downloadQRCode() {
       var qrImg = document.getElementById('form-qr');
-      if (!qrImg || !qrImg.src || qrImg.classList.contains('hidden')) {
-        alert("QR Code belum tersedia. Silakan buat event terlebih dahulu.");
+      if (!qrImg || !qrImg.src || qrImg.classList.contains('hidden') || qrImg.src.indexOf('http') === -1) {
+        showToast("Peringatan", "QR Code belum tersedia. Silakan buat event terlebih dahulu.", "warning");
         return;
       }
+
       var src = qrImg.src;
       fetch(src)
         .then(function(res) {
@@ -578,96 +606,92 @@
             window.URL.revokeObjectURL(blobUrl);
             document.body.removeChild(a);
           }, 200);
+          showToast("Unduhan Selesai", "Gambar QR Code berhasil disimpan.", "success");
         })
         .catch(function() {
           window.open(src, '_blank');
         });
     }
 
-    function switchTab(tab) {
-      var tabs = ['lajur', 'tamu', 'form', 'arsip'];
-      for (var i = 0; i < tabs.length; i++) {
-        var t = tabs[i];
-        var el = document.getElementById('tab-' + t);
-        var targetBtn = document.getElementById('btn-' + t);
-        if (el) el.classList.add('hidden');
-        if (targetBtn) {
-          targetBtn.classList.remove('bg-orange-50', 'text-orange-600');
-          targetBtn.classList.add('text-gray-500');
-        }
-      }
-
-      var activeEl = document.getElementById('tab-' + tab);
-      var activeBtn = document.getElementById('btn-' + tab);
-      if (activeEl) activeEl.classList.remove('hidden');
-      if (activeBtn) {
-        activeBtn.classList.add('bg-orange-50', 'text-orange-600');
-        activeBtn.classList.remove('text-gray-500');
-      }
-
-      var titles = {
-        lajur: 'Lajur & Counter Monitoring',
-        tamu: 'Daftar Tamu & Presensi',
-        form: 'Buat Formulir Event',
-        arsip: 'Arsip & Rekapitulasi Event'
-      };
-      if (titles[tab]) document.getElementById('page-title').innerText = titles[tab];
-
-      if (tab === 'arsip') loadArchives();
-      if (typeof lucide !== 'undefined') lucide.createIcons();
+    function handleFormToggle(isChecked) {
+      google.script.run
+        .withSuccessHandler(function(res) {
+          if (res && res.status === 'success') {
+            if (res.isOpen) {
+              showToast("Pendaftaran Dibuka", "Google Form siap menerima respon baru.", "success");
+            } else {
+              showToast("Pendaftaran Ditutup", "Pendaftaran ditutup sementara.", "warning");
+            }
+          }
+          pollDashboard();
+        })
+        .apiToggleFormStatus(isChecked);
     }
 
-    // FUNGSI POLLING DASHBOARD
-    function pollDashboard() {
-      if (typeof google === 'undefined' || !google.script || !google.script.run) return;
+    // Modal Konfirmasi Arsip Modern (Toast)
+    function handleArchiveEvent() {
+      if (document.getElementById('archive-confirm-toast')) return;
+      var container = document.getElementById('toast-container');
+      if (!container) return;
+
+      var toast = document.createElement('div');
+      toast.id = 'archive-confirm-toast';
+      toast.className = 'pointer-events-auto w-80 p-4 rounded-2xl border border-amber-200 bg-white shadow-xl transition-all duration-300 transform translate-y-2 opacity-0';
+
+      toast.innerHTML = 
+        '<div class="flex items-start gap-3">' +
+          '<div class="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-sm">' +
+            '<i data-lucide="alert-triangle" class="w-4 h-4"></i>' +
+          '</div>' +
+          '<div class="flex-1 min-w-0 pt-0.5">' +
+            '<h4 class="text-xs font-bold text-slate-900">Arsipkan Acara?</h4>' +
+            '<p class="text-[11px] text-slate-600 mt-1">Data tamu aktif akan disimpan ke Arsip dan monitoring dinolkan.</p>' +
+            '<div class="flex items-center gap-2 mt-3.5">' +
+              '<button type="button" onclick="confirmArchiveExecution()" class="px-3 py-1.5 bg-[#0f172a] text-white text-[11px] font-bold rounded-lg transition active:scale-95 shadow-sm">Ya, Arsipkan</button>' +
+              '<button type="button" onclick="cancelArchiveToast()" class="px-3 py-1.5 bg-slate-100 text-slate-700 text-[11px] font-semibold rounded-lg transition active:scale-95">Batal</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+
+      container.appendChild(toast);
+      if (typeof lucide !== 'undefined') lucide.createIcons();
+
+      setTimeout(function() {
+        toast.classList.remove('translate-y-2', 'opacity-0');
+        toast.classList.add('translate-y-0', 'opacity-100');
+      }, 20);
+    }
+
+    function cancelArchiveToast() {
+      var toast = document.getElementById('archive-confirm-toast');
+      if (toast) toast.remove();
+      showToast("Dibatalkan", "Pengarsipan event dibatalkan.", "info");
+    }
+
+    function confirmArchiveExecution() {
+      var toast = document.getElementById('archive-confirm-toast');
+      if (toast) toast.remove();
+
+      resetDashboardToZero();
 
       google.script.run
         .withSuccessHandler(function(res) {
-          if (!res) return;
-
-          // 1. KONDISI EVENT KOSONG / DIARSIPKAN -> NOLKAN SEMUA
-          if (res.status === 'empty' || !res.meta || !res.meta.eventId || res.meta.status === 'SELESAI') {
-            resetDashboardToZero();
-            return;
+          if (res && res.status === 'success') {
+            showToast("Event Diarsipkan", "Data tersimpan ke riwayat arsip.", "success");
+            pollDashboard();
+            loadArchives();
+          } else {
+            showToast("Pemberitahuan", (res ? res.message : "Tidak ada event aktif."), "warning");
+            pollDashboard();
           }
-
-          // 2. KONDISI EVENT AKTIF
-          document.getElementById('side-event-name').innerText = res.meta.title || '-';
-          var toggle = document.getElementById('event-toggle');
-          if (toggle) toggle.checked = (res.meta.status === 'AKTIF');
-
-          if (res.meta.formUrl) {
-            document.getElementById('form-link-input').value = res.meta.formUrl;
-            document.getElementById('form-open-btn').href = res.meta.formUrl;
-
-            var qr = document.getElementById('form-qr');
-            qr.src = "https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=" + encodeURIComponent(res.meta.formUrl);
-            qr.classList.remove('hidden');
-            document.getElementById('form-qr-placeholder').classList.add('hidden');
-          }
-
-          // Update KPI Cards
-          document.getElementById('kpi-total').innerText = res.stats.total;
-          document.getElementById('kpi-hadir').innerText = res.stats.hadir;
-          document.getElementById('kpi-belum').innerText = res.stats.belum;
-          document.getElementById('kpi-percent').innerText = res.stats.percent + '%';
-          document.getElementById('kpi-progress').style.width = res.stats.percent + '%';
-
-          // Update 5 Lajur Gates
-          document.getElementById('gate-1').innerText = res.stats.gates['Lajur 01'] || 0;
-          document.getElementById('gate-2').innerText = res.stats.gates['Lajur 02'] || 0;
-          document.getElementById('gate-3').innerText = res.stats.gates['Lajur 03'] || 0;
-          document.getElementById('gate-4').innerText = res.stats.gates['Lajur 04'] || 0;
-          document.getElementById('gate-5').innerText = res.stats.gates['Lajur 05'] || 0;
-
-          rawGuests = res.guests || [];
-          renderGuestTable();
-          renderLiveFeed();
         })
-        .apiGetDashboard();
+        .withFailureHandler(function(err) {
+          showToast("Gagal Mengarsipkan", err.message, "error");
+          pollDashboard();
+        })
+        .apiArchiveEvent();
     }
 
-    // FUNGSI BERSIHKAN TAMPILAN KE NOL
     function resetDashboardToZero() {
       document.getElementById('side-event-name').innerText = "Tidak Ada Event Aktif";
       var t = document.getElementById('event-toggle');
@@ -693,132 +717,6 @@
       renderLiveFeed();
     }
 
-    function handleArchiveEvent() {
-      var nameEl = document.getElementById('side-event-name');
-      var eventName = nameEl ? nameEl.innerText.trim() : "";
-
-      if (eventName === "Tidak Ada Event Aktif" || eventName === "Memuat Acara..." || !eventName) {
-        showToast("Peringatan", "Tidak ada event aktif yang sedang berjalan.", "warning");
-        return;
-      }
-
-      if (!confirm("Selesaikan dan arsipkan event ini? Data tamu akan disimpan di tab Arsip dan counter dashboard kembali ke nol.")) {
-        return;
-      }
-
-      // Reset tampilan seketika
-      resetDashboardToZero();
-
-      google.script.run
-        .withSuccessHandler(function(res) {
-          // TOAST SUKSES ARSIP EVENT
-          showToast("Event Diarsipkan", "Data tersimpan ke riwayat arsip dan dashboard kembali bersih.", "success");
-          pollDashboard();
-          loadArchives();
-        })
-        .withFailureHandler(function(err) {
-          showToast("Gagal Mengarsipkan", err.message, "error");
-          pollDashboard();
-        })
-        .apiArchiveEvent();
-    }
-
-    function handleFormToggle(isChecked) {
-      google.script.run
-        .withSuccessHandler(function(res) {
-          if (res && res.status === 'success') {
-            if (res.isOpen) {
-              showToast("Event Berhasil Dibuat", "Google Form dan pendaftaran baru siap disebarkan.", "success");
-            } else {
-              showToast("Pendaftaran Ditutup", "Kuota form dikunci. Respon baru ditolak sementara.", "warning");
-            }
-          }
-          pollDashboard();
-        })
-        .apiToggleFormStatus(isChecked);
-    }
-
-    function handleArchiveEvent() {
-      // Cegah pembuatan pop-up ganda jika tombol diklik berulang kali
-      if (document.getElementById('archive-confirm-toast')) return;
-
-      var container = document.getElementById('toast-container');
-      if (!container) return;
-
-      var toast = document.createElement('div');
-      toast.id = 'archive-confirm-toast';
-      toast.className = 'pointer-events-auto w-84 p-4 rounded-2xl border border-amber-200/90 bg-white/95 backdrop-blur-md shadow-xl shadow-slate-900/10 transition-all duration-300 transform translate-y-2 opacity-0';
-
-      toast.innerHTML = 
-        '<div class="flex items-start gap-3">' +
-          '<div class="w-8 h-8 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 shadow-sm">' +
-            '<i data-lucide="alert-triangle" class="w-4 h-4"></i>' +
-          '</div>' +
-          '<div class="flex-1 min-w-0 pt-0.5">' +
-            '<h4 class="text-xs font-bold text-slate-900 leading-snug">Selesaikan & Arsipkan Acara?</h4>' +
-            '<p class="text-[11px] text-slate-600 mt-1 leading-relaxed">' +
-              'Data tamu aktif akan disimpan ke Arsip dan seluruh kartu monitoring akan dinolkan.' +
-            '</p>' +
-            '<div class="flex items-center gap-2 mt-3.5">' +
-              '<button type="button" onclick="confirmArchiveExecution()" class="px-3 py-1.5 bg-[#0f172a] hover:bg-slate-800 text-white text-[11px] font-bold rounded-lg transition active:scale-95 shadow-sm">' +
-                'Ya, Arsipkan' +
-              '</button>' +
-              '<button type="button" onclick="cancelArchiveToast()" class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-semibold rounded-lg transition active:scale-95">' +
-                'Batal' +
-              '</button>' +
-            '</div>' +
-          '</div>' +
-        '</div>';
-
-      container.appendChild(toast);
-      if (typeof lucide !== 'undefined') lucide.createIcons();
-
-      // Animasi pop-in masuk
-      setTimeout(function() {
-        toast.classList.remove('translate-y-2', 'opacity-0');
-        toast.classList.add('translate-y-0', 'opacity-100');
-      }, 20);
-    }
-
-    // 2. Aksi jika pengguna memilih "Batal"
-    function cancelArchiveToast() {
-      var toast = document.getElementById('archive-confirm-toast');
-      if (toast) {
-        toast.classList.add('opacity-0', 'translate-x-4');
-        setTimeout(function() {
-          if (toast.parentElement) toast.remove();
-        }, 250);
-      }
-      showToast("Dibatalkan", "Pengarsipan event dibatalkan.", "info");
-    }
-
-    // 3. Aksi jika pengguna memilih "Ya, Arsipkan"
-    function confirmArchiveExecution() {
-      var toast = document.getElementById('archive-confirm-toast');
-      if (toast) toast.remove();
-
-      // Langsung nol-kan antarmuka visual
-      resetDashboardToZero();
-
-      google.script.run
-        .withSuccessHandler(function(res) {
-          if (res && res.status === 'success') {
-            showToast("Event Diarsipkan", "Data telah masuk ke riwayat arsip dan dashboard siap untuk event berikutnya.", "success");
-            pollDashboard();
-            loadArchives();
-          } else {
-            showToast("Pemberitahuan", (res ? res.message : "Tidak ada event aktif."), "warning");
-            pollDashboard();
-          }
-        })
-        .withFailureHandler(function(err) {
-          showToast("Gagal Mengarsipkan", err.message, "error");
-          pollDashboard();
-        })
-        .apiArchiveEvent();
-    }
-
-    // 2. Render Daftar Acara ke Tab Arsip Event
     function loadArchives() {
       var tbody = document.getElementById('table-archive-body');
       if (!tbody) return;
@@ -835,17 +733,16 @@
           data.forEach(function(item) {
             var tr = document.createElement('tr');
             tr.className = "hover:bg-gray-50/60 transition";
-            
             var isSelesai = (item.status === 'SELESAI');
             var badgeClass = isSelesai 
               ? 'bg-slate-100 text-slate-600 border border-slate-200' 
               : 'bg-emerald-50 text-emerald-600 border border-emerald-200';
 
             tr.innerHTML = 
-              '<td class="py-3 px-3 font-mono font-bold text-gray-700">' + item.id + '</td>' +
-              '<td class="py-3 px-3 font-bold text-gray-900">' + item.title + '</td>' +
-              '<td class="py-3 px-3 text-gray-500">' + item.date + ' (' + item.time + ') • ' + item.location + '</td>' +
-              '<td class="py-3 px-3"><span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold ' + badgeClass + '">' + item.status + '</span></td>';
+              '<td class="py-3 px-3 font-mono font-bold text-gray-700">' + (item.id || '-') + '</td>' +
+              '<td class="py-3 px-3 font-bold text-gray-900">' + (item.title || '-') + '</td>' +
+              '<td class="py-3 px-3 text-gray-500">' + (item.date || '-') + ' (' + (item.time || '-') + ') • ' + (item.location || item.loc || '-') + '</td>' +
+              '<td class="py-3 px-3"><span class="px-2.5 py-0.5 rounded-full text-[10px] font-bold ' + badgeClass + '">' + (item.status || 'SELESAI') + '</span></td>';
             tbody.appendChild(tr);
           });
         })
@@ -855,66 +752,45 @@
         .apiGetArchives();
     }
 
-    function loadArchives() {
-      google.script.run.withSuccessHandler(function(data) {
-        var tbody = document.getElementById('table-archive-body');
-        tbody.innerHTML = '';
-        (data || []).forEach(function(d) {
-          var tr = document.createElement('tr');
-          var isActive = (d.status === 'AKTIF');
-          var badge = isActive ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-500';
-          tr.innerHTML = 
-            '<td class="py-2.5 px-3 font-mono text-gray-400">' + d.id + '</td>' +
-            '<td class="py-2.5 px-3 font-bold text-gray-800">' + d.title + '</td>' +
-            '<td class="py-2.5 px-3 text-gray-500">' + d.schedule + ' - ' + d.loc + '</td>' +
-            '<td class="py-2.5 px-3"><span class="px-2 py-0.5 rounded-full text-[10px] font-bold ' + badge + '">' + d.status + '</span></td>';
-          tbody.appendChild(tr);
-        });
-      }).apiGetArchives();
-    }
-
-    var isPolling = false;
-    var pollTimer = null;
-    var POLL_INTERVAL = 12000; // Eksekusi diubah menjadi santai tiap 12 detik
-
     function scheduleNextPoll() {
       if (pollTimer) clearTimeout(pollTimer);
       pollTimer = setTimeout(pollDashboard, POLL_INTERVAL);
     }
 
+    // FUNGSI POLLING DASHBOARD
     function pollDashboard() {
-      // Berhenti mengeksekusi jika tab browser sedang tidak dibuka
       if (document.hidden) {
         scheduleNextPoll();
         return;
       }
 
-      // Cegah eksekusi ganda jika proses sebelumnya belum selesai
       if (isPolling) return;
       if (typeof google === 'undefined' || !google.script || !google.script.run) return;
 
       isPolling = true;
 
+      // Panggil apiGetDashboardData() yang sudah sinkron dengan backend
       google.script.run
         .withSuccessHandler(function(res) {
           isPolling = false;
-          scheduleNextPoll(); // Jadwalkan giliran berikutnya hanya setelah selesai
+          scheduleNextPoll();
 
           if (!res) return;
 
-          // Kondisi jika event kosong atau sudah diarsipkan
+          // 1. KONDISI TIDAK ADA EVENT AKTIF
           if (res.status === 'empty' || !res.meta || !res.meta.eventId || res.meta.status === 'SELESAI') {
             resetDashboardToZero();
             return;
           }
 
-          // Perbarui teks nama event aktif
+          // 2. KONDISI EVENT AKTIF DITEMUKAN
           var sideName = document.getElementById('side-event-name');
           if (sideName) sideName.innerText = res.meta.title || '-';
 
           var toggle = document.getElementById('event-toggle');
           if (toggle) toggle.checked = (res.meta.status === 'AKTIF');
 
+          // Pasang Link dan QR Code agar tetap tampil permanen
           if (res.meta.formUrl) {
             var linkInput = document.getElementById('form-link-input');
             if (linkInput) linkInput.value = res.meta.formUrl;
@@ -924,24 +800,24 @@
 
             var qr = document.getElementById('form-qr');
             if (qr) {
-              qr.src = "https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=" + encodeURIComponent(res.meta.formUrl);
+              qr.src = "https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=" + encodeURIComponent(res.meta.formUrl);
               qr.classList.remove('hidden');
             }
+
             var placeholder = document.getElementById('form-qr-placeholder');
             if (placeholder) placeholder.classList.add('hidden');
           }
 
-          // Perbarui kartu KPI
+          // Perbarui metrik KPI
           if (res.stats) {
             document.getElementById('kpi-total').innerText = res.stats.total;
             document.getElementById('kpi-hadir').innerText = res.stats.hadir;
             document.getElementById('kpi-belum').innerText = res.stats.belum;
             document.getElementById('kpi-percent').innerText = res.stats.percent + '%';
-            
+
             var progressBar = document.getElementById('kpi-progress');
             if (progressBar) progressBar.style.width = res.stats.percent + '%';
 
-            // Perbarui counter 5 lajur
             if (res.stats.gates) {
               document.getElementById('gate-1').innerText = res.stats.gates['Lajur 01'] || 0;
               document.getElementById('gate-2').innerText = res.stats.gates['Lajur 02'] || 0;
@@ -959,10 +835,9 @@
           isPolling = false;
           scheduleNextPoll();
         })
-        .apiGetDashboard();
+        .apiGetDashboardData();
     }
 
-    // Refresh otomatis saat tab dibuka kembali oleh user
     document.addEventListener('visibilitychange', function() {
       if (!document.hidden) {
         pollDashboard();
@@ -974,7 +849,6 @@
         if (typeof lucide !== 'undefined') lucide.createIcons();
       } catch (e) {}
 
-      // Panggil satu kali saat pertama buka
       pollDashboard();
     };
   </script>
