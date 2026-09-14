@@ -1,184 +1,314 @@
-function doGet(e) {
-  const page = (e && e.parameter && e.parameter.page) ? e.parameter.page : 'admin';
-  const template = (page === 'screen') ? 'WelcomeScreen' : 'DashboardAdmin';
+// File: 01_Router.gs
 
-  return HtmlService.createTemplateFromFile(template)
-    .evaluate()
-    .setTitle(page === 'screen' ? 'Welcome Screen Computa' : 'Dashboard Presensi Computa')
+/**
+ * 1. HTTP GATEWAY (WEB APP ROUTER)
+ */
+function doGet(e) {
+  const params = (e && e.parameter) ? e.parameter : {};
+  const page = params.page || 'dashboard';
+
+  if (page === 'scanner') {
+    return HtmlService.createHtmlOutputFromFile('ScannerView')
+      .setTitle('Gate Scanner - Event Check-In')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no');
+  }
+
+  // Halaman default: Dashboard Admin Console
+  return HtmlService.createHtmlOutputFromFile('DashboardAdmin')
+    .setTitle('Computa Admin Console')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
     .addMetaTag('viewport', 'width=device-width, initial-scale=1.0');
 }
-// File: 01_Router.gs
-
-function apiToggleFormStatus(isOpen) {
-  try {
-    return EventModule.toggleFormAccepting(isOpen);
-  } catch (err) {
-    Logger.log("apiToggleFormStatus Error: " + err.toString());
-    return { status: "error", message: err.toString() };
-  }
-}
-function onFormSubmitTrigger(e) {
-  try {
-    const active = EventModule.getActiveEvent();
-    if (!active || active.status !== "AKTIF") return;
-
-    const ss = getDbSpreadsheet();
-    let sheet = ss.getSheetByName(CONFIG.DATABASE.DATA_SHEET);
-    if (!sheet) {
-      sheet = ss.insertSheet(CONFIG.DATABASE.DATA_SHEET);
-      sheet.appendRow(["Timestamp", "Event ID", "Ticket ID", "Nama Lengkap", "Instansi", "Email", "WhatsApp", "Status", "Waktu Masuk", "Gate"]);
-    }
-
-    CoreLock.execute(() => {
-      // Urutan respon form: [Timestamp, Email, Nama Lengkap, Instansi, WhatsApp]
-      const responses = e.values; 
-      const timestamp = responses[0];
-      const email = responses[1];
-      const name = responses[2];
-      const agency = responses[3];
-      const wa = responses[4];
-
-      // Buat Ticket ID otomatis
-      const ticketId = "TIK-" + Math.floor(1000 + Math.random() * 9000);
-
-      // Pindahkan otomatis ke baris baru Presensi_Master
-      sheet.appendRow([
-        timestamp,
-        active.eventId,
-        ticketId,
-        name,
-        agency,
-        email,
-        wa,
-        "Belum", // Status awal
-        "-",     // Jam masuk
-        "-"      // Lajur gate
-      ]);
-
-      // Otomatis kirim email e-ticket
-      AttendanceModule.sendEmail(email, name, agency, ticketId, active);
-    });
-  } catch (err) {
-    Logger.log("Gagal memindahkan data otomatis: " + err.toString());
-  }
-}
-// File: 01_Router.gs
 
 /**
- * Menyelesaikan dan mengarsipkan event yang sedang aktif.
- * Mengubah status jadi SELESAI, menutup form, membersihkan data presensi, dan mereset cache.
+ * 2. AUTENTIKASI LOGIN ADMIN
  */
+function apiVerifyLogin(username, password) {
+  if (typeof LoginModule !== 'undefined' && LoginModule.verify) {
+    return LoginModule.verify(username, password);
+  }
+
+  // Verifikasi fallback bawaan jika modul LoginModule belum terpasang
+  const cleanUser = String(username || '').trim();
+  const cleanPass = String(password || '').trim();
+
+  if (cleanUser === 'admin' && cleanPass === 'computa2026') {
+    return {
+      status: 'success',
+      user: {
+        username: cleanUser,
+        role: 'Administrator',
+        name: 'Admin Computa'
+      }
+    };
+  }
+
+  return { status: 'error', message: 'Username atau password salah.' };
+}
+
+/**
+ * 3. KONTROL SIKLUS EVENT (BUAT, TOGGLE, DAN ARSIP)
+ */
+function apiCreateEvent(payload) {
+  if (typeof EventModule !== 'undefined' && EventModule.createEvent) {
+    return EventModule.createEvent(payload);
+  }
+  if (typeof createEvent === 'function') {
+    return createEvent(payload);
+  }
+  return { status: 'error', message: 'Modul Event_Module.gs tidak ditemukan.' };
+}
+
+function apiToggleFormStatus(isOpen) {
+  if (typeof EventModule !== 'undefined' && EventModule.toggleFormAccepting) {
+    return EventModule.toggleFormAccepting(isOpen);
+  }
+  return { status: 'error', message: 'Fungsi toggle form tidak ditemukan.' };
+}
+
 function apiArchiveEvent() {
+  if (typeof EventModule !== 'undefined' && EventModule.archiveCurrentEvent) {
+    return EventModule.archiveCurrentEvent();
+  }
+  return { status: 'error', message: 'Fungsi arsip event tidak ditemukan.' };
+}
+
+/**
+ * 4. PENGAMBILAN DATA DASHBOARD & MONITORING REAL-TIME
+ */
+function apiGetDashboard() {
+  return apiGetDashboardData();
+}
+
+function apiGetDashboardData() {
   try {
-    const ss = getDatabaseSpreadsheet ? getDatabaseSpreadsheet() : SpreadsheetApp.getActiveSpreadsheet();
-    const masterSheet = ss.getSheetByName(CONFIG.DATABASE.MASTER_SHEET);
+    const ss = (typeof getDatabaseSpreadsheet === 'function')
+      ? getDatabaseSpreadsheet()
+      : ((typeof getDbSpreadsheet === 'function') ? getDbSpreadsheet() : SpreadsheetApp.getActiveSpreadsheet());
+
+    if (!ss) return getEmptyStatePayload();
+
+    const masterSheetName = (typeof CONFIG !== 'undefined' && CONFIG.DATABASE && CONFIG.DATABASE.MASTER_SHEET)
+      ? CONFIG.DATABASE.MASTER_SHEET
+      : 'Master_Events';
+
+    const masterSheet = ss.getSheetByName(masterSheetName);
     if (!masterSheet || masterSheet.getLastRow() < 2) {
-      return { status: "error", message: "Database event kosong." };
+      return getEmptyStatePayload();
     }
 
     const rows = masterSheet.getDataRange().getValues();
-    const headers = rows[0].map(h => String(h).trim().toLowerCase());
-    
-    // Cari letak kolom status dan form ID secara fleksibel
-    let statusColIdx = headers.indexOf("status");
-    let formIdColIdx = headers.indexOf("form id");
-    if (statusColIdx === -1) statusColIdx = headers.length - 1;
-    if (formIdColIdx === -1) formIdColIdx = 5;
+    let activeRow = null;
 
-    let targetEventFound = false;
-
-    // Ubah semua event berstatus AKTIF atau TUTUP_FORM menjadi SELESAI
-    for (let i = 1; i < rows.length; i++) {
-      const currentStatus = String(rows[i][statusColIdx] || "").trim().toUpperCase();
-      if (currentStatus === "AKTIF" || currentStatus === "TUTUP_FORM") {
-        masterSheet.getRange(i + 1, statusColIdx + 1).setValue("SELESAI");
-        targetEventFound = true;
-
-        // Kunci respon Google Form
-        try {
-          const formId = rows[i][formIdColIdx];
-          if (formId) {
-            FormApp.openById(formId).setAcceptingResponses(false);
-          }
-        } catch (formErr) {
-          Logger.log("Peringatan form tutup: " + formErr.message);
-        }
+    // Cari baris berstatus AKTIF atau TUTUP_FORM dari baris terbawah
+    for (let i = rows.length - 1; i >= 1; i--) {
+      const st = String(rows[i][7] || rows[i][8] || '').trim().toUpperCase();
+      if (st === 'AKTIF' || st === 'TUTUP_FORM') {
+        activeRow = rows[i];
+        break;
       }
     }
 
-    // Bersihkan baris di Presensi_Master agar counter langsung 0
-    const presensiSheet = ss.getSheetByName(CONFIG.DATABASE.DATA_SHEET);
-    if (presensiSheet && presensiSheet.getLastRow() > 1) {
-      presensiSheet.deleteRows(2, presensiSheet.getLastRow() - 1);
+    if (!activeRow) {
+      return getEmptyStatePayload();
     }
 
-    // Bersihkan cache
-    if (typeof CoreCache !== 'undefined') {
-      CoreCache.remove("ACTIVE_EVENT");
-      CoreCache.remove("ACTIVE_EVENT_META");
+    const eventId = String(activeRow[0] || '');
+    const title = String(activeRow[1] || 'Acara Tanpa Judul');
+    const date = String(activeRow[2] || '-');
+    const time = String(activeRow[3] || '-');
+    const location = String(activeRow[4] || '-');
+    const formUrl = String(activeRow[6] || activeRow[7] || '');
+    const eventStatus = String(activeRow[7] || activeRow[8] || 'AKTIF');
+
+    const guests = [];
+    const gateStats = { 'Lajur 01': 0, 'Lajur 02': 0, 'Lajur 03': 0, 'Lajur 04': 0, 'Lajur 05': 0 };
+    let hadirCount = 0;
+
+    // Baca data sheet presensi peserta
+    const dataSheetName = 'Data_' + eventId;
+    let dataSheet = ss.getSheetByName(dataSheetName);
+    if (!dataSheet) {
+      dataSheet = ss.getSheetByName('Presensi_Master');
     }
 
-    return { 
-      status: "success", 
-      message: targetEventFound ? "Event berhasil diarsipkan." : "Tidak ada event aktif yang perlu diarsipkan." 
+    if (dataSheet && dataSheet.getLastRow() > 1) {
+      const dRows = dataSheet.getDataRange().getValues();
+      for (let j = 1; j < dRows.length; j++) {
+        const r = dRows[j];
+        if (!r[1] && !r[2]) continue;
+
+        const isHadir = String(r[6] || '').trim().toLowerCase() === 'hadir';
+        const gGate = String(r[8] || '-').trim();
+
+        if (isHadir) {
+          hadirCount++;
+          if (gateStats.hasOwnProperty(gGate)) {
+            gateStats[gGate]++;
+          }
+        }
+
+        guests.push({
+          ticket: String(r[1] || '-'),
+          name: String(r[2] || '-'),
+          agency: String(r[3] || '-'),
+          wa: String(r[5] || '-'),
+          status: isHadir ? 'Hadir' : 'Belum',
+          time: String(r[7] || '-'),
+          gate: gGate
+        });
+      }
+    }
+
+    const total = guests.length;
+    const percent = total > 0 ? Math.round((hadirCount / total) * 100) : 0;
+
+    return {
+      status: 'success',
+      meta: {
+        eventId: eventId,
+        title: title,
+        date: date,
+        time: time,
+        location: location,
+        formUrl: formUrl,
+        status: eventStatus
+      },
+      stats: {
+        total: total,
+        hadir: hadirCount,
+        belum: total - hadirCount,
+        percent: percent,
+        gates: gateStats
+      },
+      guests: guests
     };
 
   } catch (err) {
-    Logger.log("apiArchiveEvent Error: " + err.toString());
-    return { status: "error", message: err.toString() };
+    Logger.log('apiGetDashboardData Error: ' + err.toString());
+    return getEmptyStatePayload();
   }
 }
 
+function getEmptyStatePayload() {
+  return {
+    status: 'empty',
+    meta: {
+      eventId: '',
+      title: 'Tidak Ada Event Aktif',
+      status: 'SELESAI',
+      formUrl: ''
+    },
+    stats: {
+      total: 0,
+      hadir: 0,
+      belum: 0,
+      percent: 0,
+      gates: { 'Lajur 01': 0, 'Lajur 02': 0, 'Lajur 03': 0, 'Lajur 04': 0, 'Lajur 05': 0 }
+    },
+    guests: []
+  };
+}
+
 /**
- * 2. PENGAMBIL DATA ARSIP EVENT
- * Mengirim seluruh daftar event terdahulu untuk ditampilkan di tab 'Arsip Event'
+ * 5. RIWAYAT ARSIP EVENT
  */
 function apiGetArchives() {
+  return getAllEventsHistory();
+}
+
+function getAllEventsHistory() {
   try {
-    const ss = getDatabaseSpreadsheet ? getDatabaseSpreadsheet() : SpreadsheetApp.getActiveSpreadsheet();
-    const masterSheet = ss.getSheetByName(CONFIG.DATABASE.MASTER_SHEET);
-    if (!masterSheet || masterSheet.getLastRow() < 2) return [];
+    const ss = (typeof getDatabaseSpreadsheet === 'function')
+      ? getDatabaseSpreadsheet()
+      : ((typeof getDbSpreadsheet === 'function') ? getDbSpreadsheet() : SpreadsheetApp.getActiveSpreadsheet());
+
+    if (!ss) return [];
+
+    const masterSheetName = (typeof CONFIG !== 'undefined' && CONFIG.DATABASE && CONFIG.DATABASE.MASTER_SHEET)
+      ? CONFIG.DATABASE.MASTER_SHEET
+      : 'Master_Events';
+
+    const masterSheet = ss.getSheetByName(masterSheetName);
+    if (!masterSheet || masterSheet.getLastRow() < 2) {
+      return [];
+    }
 
     const rows = masterSheet.getDataRange().getValues();
     const archives = [];
 
-    // Baca dari baris kedua ke bawah
     for (let i = 1; i < rows.length; i++) {
       const r = rows[i];
-      if (!r[0]) continue; // Lewati jika Event ID kosong
+      if (!r[0]) continue;
 
       archives.push({
-        id: String(r[0] || "-"),
-        title: String(r[1] || "Acara Tanpa Judul"),
-        date: String(r[2] || "-"),
-        time: String(r[3] || "-"),
-        location: String(r[4] || "-"),
-        status: String(r[7] || r[r.length - 1] || "SELESAI")
+        id: String(r[0] || ''),
+        title: String(r[1] || 'Acara Tanpa Judul'),
+        date: String(r[2] || '-'),
+        time: String(r[3] || '-'),
+        location: String(r[4] || '-'),
+        status: String(r[7] || r[8] || 'SELESAI')
       });
     }
 
-    // Tampilkan dari yang paling baru diarsipkan
     return archives.reverse();
-
   } catch (e) {
-    Logger.log("apiGetArchives Error: " + e.toString());
+    Logger.log('getAllEventsHistory Error: ' + e.toString());
     return [];
   }
 }
 
-// Alias untuk menjaga kompatibilitas pemanggilan lama
-function apiToggleLockdown() {
-  return apiArchiveEvent();
-}
-// Controller Endpoints
-function apiGetDashboard() { return AnalyticsModule.getDashboardData(); }
-function apiCreateEvent(payload) { return EventModule.createEvent(payload); }
-function apiToggleLockdown() { return EventModule.toggleLockdown(); }
-function apiGetArchives() { return AnalyticsModule.getAllArchives(); }
-function apiCheckIn(code, gate) { return AttendanceModule.checkIn(code, gate); }
-function apiGetActiveConfig() { return EventModule.getActiveEvent(); }
-function apiVerifyLogin(username, password) {return LoginModule.verify(username, password);}
+function onFormSubmitTrigger(e) {
+  try {
+    const ss = (typeof getDatabaseSpreadsheet === "function") 
+      ? getDatabaseSpreadsheet() 
+      : SpreadsheetApp.getActiveSpreadsheet();
 
-// Trigger Form Submit
-function onFormSubmitTrigger(e) { AttendanceModule.handleFormSubmit(e); }
+    const masterSheet = ss.getSheetByName(CONFIG.DATABASE.MASTER_SHEET || "Master_Events");
+    if (!masterSheet) return;
+
+    const masterRows = masterSheet.getDataRange().getValues();
+    let targetSheetName = "";
+
+    // Cari sheet data event yang AKTIF atau TUTUP_FORM
+    for (let i = masterRows.length - 1; i >= 1; i--) {
+      const st = String(masterRows[i][7] || masterRows[i][8] || "").toUpperCase();
+      if (st === "AKTIF" || st === "TUTUP_FORM") {
+        targetSheetName = String(masterRows[i][5] || "");
+        break;
+      }
+    }
+
+    if (!targetSheetName) return;
+    const targetSheet = ss.getSheetByName(targetSheetName);
+    if (!targetSheet) return;
+
+    // Ambil data respon (sesuaikan urutan pertanyaan di form: Email, Nama, Instansi, WhatsApp)
+    const vals = e ? e.values : [];
+    const timestamp = vals[0] || new Date();
+    const email = vals[1] || "-";
+    const nama = vals[2] || "-";
+    const instansi = vals[3] || "-";
+    const wa = vals[4] || "-";
+
+    const nextRow = targetSheet.getLastRow();
+    const ticketId = "TKT-" + Utilities.formatString("%03d", nextRow);
+
+    // Format: [Timestamp, Ticket ID, Nama Lengkap, Instansi, Email, WhatsApp, Status, Waktu Masuk, Gate]
+    targetSheet.appendRow([
+      timestamp,
+      ticketId,
+      nama,
+      instansi,
+      email,
+      wa,
+      "Belum",
+      "-",
+      "-"
+    ]);
+
+  } catch (err) {
+    Logger.log("onFormSubmitTrigger Error: " + err.toString());
+  }
+}
